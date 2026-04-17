@@ -69,42 +69,119 @@ export async function getChannelVideos(
   );
 }
 
-export async function getTranscript(videoId: string): Promise<string> {
+export async function getTranscript(
+  videoId: string,
+  onProgress?: (msg: string) => void
+): Promise<string> {
+  // Step 1: Try auto-generated captions (fast, ~2 seconds)
+  try {
+    const transcript = await getTranscriptViaCaptions(videoId);
+    if (transcript) return transcript;
+  } catch (e: any) {
+    console.log(`[transcript] No captions for ${videoId}: ${e.message}`);
+  }
+
+  // Step 2: Download audio + Whisper transcription (~3-8 minutes on CPU)
+  onProgress?.("📥 No captions found — downloading audio for Whisper transcription (this takes a few minutes)...");
+  return transcribeViaWhisper(videoId, onProgress);
+}
+
+async function getTranscriptViaCaptions(videoId: string): Promise<string> {
   const { spawn } = await import("child_process");
   const { promises: fs } = await import("fs");
   const { default: path } = await import("path");
   const { default: os } = await import("os");
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-${videoId}-`));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-caps-${videoId}-`));
   const outputTemplate = path.join(tmpDir, "%(id)s");
 
   try {
+    let stderr = "";
     await new Promise<void>((resolve, reject) => {
       const proc = spawn("yt-dlp", [
         `https://www.youtube.com/watch?v=${videoId}`,
         "--write-auto-subs",
-        "--sub-langs", "ko,ko-KR",
+        "--write-subs",
+        "--sub-langs", "ko.*,ko",
         "--skip-download",
         "--sub-format", "vtt",
         "-o", outputTemplate,
         "--no-playlist",
-        "--quiet",
       ]);
-      let stderr = "";
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+      proc.stdout?.on("data", () => {}); // drain stdout
       proc.on("close", (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`yt-dlp failed (code ${code}): ${stderr.slice(0, 200)}`));
+        else reject(new Error(`yt-dlp exit ${code}: ${stderr.slice(0, 300)}`));
       });
       proc.on("error", reject);
     });
 
     const files = await fs.readdir(tmpDir);
     const vttFile = files.find((f) => f.endsWith(".vtt"));
-    if (!vttFile) throw new Error("No subtitle file generated — captions may be disabled");
+    if (!vttFile) throw new Error("No VTT subtitle file found");
 
     const vttContent = await fs.readFile(path.join(tmpDir, vttFile), "utf-8");
     return parseVtt(vttContent);
+  } finally {
+    const { promises: fs2 } = await import("fs");
+    await fs2.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function transcribeViaWhisper(
+  videoId: string,
+  onProgress?: (msg: string) => void
+): Promise<string> {
+  const { spawn } = await import("child_process");
+  const { promises: fs } = await import("fs");
+  const { default: path } = await import("path");
+  const { default: os } = await import("os");
+  const { fileURLToPath } = await import("url");
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-audio-${videoId}-`));
+  const audioPath = path.join(tmpDir, `${videoId}.mp3`);
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const whisperScript = path.join(__dirname, "whisper_transcribe.py");
+
+  try {
+    // Download audio
+    onProgress?.("📥 Downloading audio...");
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn("yt-dlp", [
+        `https://www.youtube.com/watch?v=${videoId}`,
+        "-x",
+        "--audio-format", "mp3",
+        "--audio-quality", "5",   // 128kbps — good enough for speech
+        "-o", audioPath,
+        "--no-playlist",
+      ]);
+      let stderr = "";
+      proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+      proc.stdout?.on("data", () => {});
+      proc.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Audio download failed (code ${code}): ${stderr.slice(0, 300)}`));
+      });
+      proc.on("error", reject);
+    });
+
+    onProgress?.("🎙️ Running Whisper transcription (Korean)... this may take a few minutes");
+
+    const transcript = await new Promise<string>((resolve, reject) => {
+      const proc = spawn("python3", [whisperScript, audioPath]);
+      let stdout = "";
+      let stderr = "";
+      proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+      proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+      proc.on("close", (code) => {
+        if (code === 0 && stdout.trim()) resolve(stdout.trim());
+        else reject(new Error(`Whisper failed (code ${code}): ${stderr.slice(0, 300)}`));
+      });
+      proc.on("error", reject);
+    });
+
+    return transcript;
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

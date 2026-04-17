@@ -65,9 +65,9 @@ app.post("/api/analyze", async (req, res) => {
 
       let transcript = "";
       try {
-        transcript = await getTranscript(video.id);
-      } catch {
-        emit({ type: "progress", message: `⚠️ No transcript available — skipping "${video.title}"` });
+        transcript = await getTranscript(video.id, (msg) => emit({ type: "progress", message: msg }));
+      } catch (e: any) {
+        emit({ type: "progress", message: `⚠️ Could not transcribe "${video.title}": ${e.message}` });
         continue;
       }
 
