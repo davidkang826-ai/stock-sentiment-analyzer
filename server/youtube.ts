@@ -70,29 +70,86 @@ export async function getChannelVideos(
 }
 
 export async function getTranscript(videoId: string): Promise<string> {
-  // Try youtube-transcript package with several language fallbacks
-  const { YoutubeTranscript } = await import("youtube-transcript");
+  const { spawn } = await import("child_process");
+  const { promises: fs } = await import("fs");
+  const { default: path } = await import("path");
+  const { default: os } = await import("os");
 
-  // Try Korean first, then auto-generated, then any available
-  const langAttempts = [{ lang: "ko" }, { lang: "ko-KR" }, {}];
-  for (const opts of langAttempts) {
-    try {
-      const segments = await YoutubeTranscript.fetchTranscript(videoId, opts as any);
-      if (segments?.length) {
-        return segments
-          .map((s: any) => s.text)
-          .join(" ")
-          .replace(/&#39;/g, "'")
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&quot;/g, '"')
-          .replace(/\s+/g, " ")
-          .trim();
-      }
-    } catch {
-      // try next
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-${videoId}-`));
+  const outputTemplate = path.join(tmpDir, "%(id)s");
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn("yt-dlp", [
+        `https://www.youtube.com/watch?v=${videoId}`,
+        "--write-auto-subs",
+        "--sub-langs", "ko,ko-KR",
+        "--skip-download",
+        "--sub-format", "vtt",
+        "-o", outputTemplate,
+        "--no-playlist",
+        "--quiet",
+      ]);
+      let stderr = "";
+      proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+      proc.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`yt-dlp failed (code ${code}): ${stderr.slice(0, 200)}`));
+      });
+      proc.on("error", reject);
+    });
+
+    const files = await fs.readdir(tmpDir);
+    const vttFile = files.find((f) => f.endsWith(".vtt"));
+    if (!vttFile) throw new Error("No subtitle file generated — captions may be disabled");
+
+    const vttContent = await fs.readFile(path.join(tmpDir, vttFile), "utf-8");
+    return parseVtt(vttContent);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function parseVtt(vtt: string): string {
+  const lines = vtt.split("\n");
+  const texts: string[] = [];
+  let capturing = false;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+
+    // Skip header/metadata lines
+    if (
+      line.startsWith("WEBVTT") ||
+      line.startsWith("Kind:") ||
+      line.startsWith("Language:") ||
+      line === ""
+    ) {
+      capturing = false;
+      continue;
+    }
+
+    // Timestamp line — next lines are caption text
+    if (line.includes("-->")) {
+      capturing = true;
+      continue;
+    }
+
+    if (capturing && line) {
+      // Remove inline timestamp tags like <00:00:01.234> and <c> </c>
+      const cleaned = line
+        .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&#39;/g, "'")
+        .trim();
+      if (cleaned) texts.push(cleaned);
     }
   }
-  throw new Error("No transcript available for this video");
+
+  // Deduplicate consecutive identical lines (common in YT auto-subs)
+  const deduped = texts.filter((t, i) => i === 0 || t !== texts[i - 1]);
+  return deduped.join(" ").replace(/\s+/g, " ").trim();
 }
