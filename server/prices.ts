@@ -1,7 +1,5 @@
 import yahooFinance from "yahoo-finance2";
 
-yahooFinance.suppressNotices(["yahooSurvey"]);
-
 export interface PriceData {
   historical: number | null;
   current: number | null;
