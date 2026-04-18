@@ -1,6 +1,20 @@
 const YT_API_KEY = process.env.YOUTUBE_API_KEY!;
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
 
+// Write YouTube cookies to a temp file once if YOUTUBE_COOKIES env var is set.
+// The env var should contain the full Netscape-format cookies.txt content.
+let cookiesFilePath: string | null = null;
+async function getCookiesArgs(): Promise<string[]> {
+  if (!process.env.YOUTUBE_COOKIES) return [];
+  if (cookiesFilePath) return ["--cookies", cookiesFilePath];
+  const { promises: fs } = await import("fs");
+  const { default: os } = await import("os");
+  const { default: path } = await import("path");
+  cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
+  await fs.writeFile(cookiesFilePath, process.env.YOUTUBE_COOKIES, "utf-8");
+  return ["--cookies", cookiesFilePath];
+}
+
 export interface VideoInfo {
   id: string;
   title: string;
@@ -96,6 +110,7 @@ async function getTranscriptViaCaptions(videoId: string): Promise<string> {
   const outputTemplate = path.join(tmpDir, "%(id)s");
 
   try {
+    const cookiesArgs = await getCookiesArgs();
     let stderr = "";
     await new Promise<void>((resolve, reject) => {
       const proc = spawn("yt-dlp", [
@@ -108,6 +123,7 @@ async function getTranscriptViaCaptions(videoId: string): Promise<string> {
         "-o", outputTemplate,
         "--no-playlist",
         "--extractor-args", "youtube:player_client=android,mweb",
+        ...cookiesArgs,
       ]);
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
       proc.stdout?.on("data", () => {}); // drain stdout
@@ -146,6 +162,7 @@ async function transcribeViaWhisper(
   const whisperScript = path.join(__dirname, "whisper_transcribe.py");
 
   try {
+    const cookiesArgs = await getCookiesArgs();
     // Download audio
     onProgress?.("📥 Downloading audio...");
     await new Promise<void>((resolve, reject) => {
@@ -157,6 +174,7 @@ async function transcribeViaWhisper(
         "-o", audioPath,
         "--no-playlist",
         "--extractor-args", "youtube:player_client=android,mweb",
+        ...cookiesArgs,
       ]);
       let stderr = "";
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
