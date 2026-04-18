@@ -107,6 +107,7 @@ async function getTranscriptViaCaptions(videoId: string): Promise<string> {
         "--sub-format", "vtt",
         "-o", outputTemplate,
         "--no-playlist",
+        "--extractor-args", "youtube:player_client=android,mweb",
       ]);
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
       proc.stdout?.on("data", () => {}); // drain stdout
@@ -155,6 +156,7 @@ async function transcribeViaWhisper(
         "--audio-quality", "5",   // 128kbps — good enough for speech
         "-o", audioPath,
         "--no-playlist",
+        "--extractor-args", "youtube:player_client=android,mweb",
       ]);
       let stderr = "";
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
