@@ -5,14 +5,20 @@ const YT_BASE = "https://www.googleapis.com/youtube/v3";
 // The env var should contain the full Netscape-format cookies.txt content.
 let cookiesFilePath: string | null = null;
 async function getCookiesArgs(): Promise<string[]> {
-  if (!process.env.YOUTUBE_COOKIES) return [];
-  if (cookiesFilePath) return ["--cookies", cookiesFilePath];
-  const { promises: fs } = await import("fs");
-  const { default: os } = await import("os");
-  const { default: path } = await import("path");
-  cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
-  await fs.writeFile(cookiesFilePath, process.env.YOUTUBE_COOKIES, "utf-8");
-  return ["--cookies", cookiesFilePath];
+  const args: string[] = [];
+  if (process.env.YOUTUBE_COOKIES) {
+    if (!cookiesFilePath) {
+      const { promises: fs } = await import("fs");
+      const { default: os } = await import("os");
+      const { default: path } = await import("path");
+      cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
+      await fs.writeFile(cookiesFilePath, process.env.YOUTUBE_COOKIES, "utf-8");
+    }
+    args.push("--cookies", cookiesFilePath);
+  }
+  // Tell yt-dlp to use the Node.js runtime already present in the container
+  args.push("--js-runtimes", "node:/usr/local/bin/node");
+  return args;
 }
 
 export interface VideoInfo {
@@ -122,7 +128,7 @@ async function getTranscriptViaCaptions(videoId: string): Promise<string> {
         "--sub-format", "vtt",
         "-o", outputTemplate,
         "--no-playlist",
-        "--extractor-args", "youtube:player_client=android,mweb",
+        "--extractor-args", "youtube:player_client=mweb,web",
         ...cookiesArgs,
       ]);
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
@@ -173,7 +179,7 @@ async function transcribeViaWhisper(
         "--audio-quality", "5",   // 128kbps — good enough for speech
         "-o", audioPath,
         "--no-playlist",
-        "--extractor-args", "youtube:player_client=android,mweb",
+        "--extractor-args", "youtube:player_client=mweb,web",
         ...cookiesArgs,
       ]);
       let stderr = "";
