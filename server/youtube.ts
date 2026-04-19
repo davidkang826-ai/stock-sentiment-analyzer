@@ -16,8 +16,8 @@ async function getCookiesArgs(): Promise<string[]> {
     }
     args.push("--cookies", cookiesFilePath);
   }
-  // Tell yt-dlp to use the Node.js runtime already present in the container
-  args.push("--js-runtimes", "node:/usr/local/bin/node");
+  // Download yt-dlp's remote JS challenge solver (yt-dlp's own recommendation)
+  args.push("--remote-components", "ejs:github");
   return args;
 }
 
