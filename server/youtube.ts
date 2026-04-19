@@ -179,7 +179,7 @@ async function transcribeViaAssemblyAI(
         authorization: process.env.ASSEMBLYAI_API_KEY!,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ audio_url: upload_url, language_code: "ko" }),
+      body: JSON.stringify({ audio_url: upload_url, language_code: "ko", speech_model: "universal-2" }),
     });
     if (!transcriptRes.ok) {
       const errBody = await transcriptRes.text();
