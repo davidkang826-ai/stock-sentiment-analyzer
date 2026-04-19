@@ -39,8 +39,10 @@ interface VideoResult {
   };
   analysis: {
     videoSummary: string;
+    transcriptEnglish: string;
     tickers: TickerResult[];
   };
+  transcript: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -116,7 +118,9 @@ function PriceChange({ pct }: { pct: number | null | undefined }) {
 
 function VideoCard({ result }: { result: VideoResult }) {
   const [expanded, setExpanded] = useState(true);
-  const { video, analysis } = result;
+  const [showTranscript, setShowTranscript] = useState(false);
+  const [transcriptLang, setTranscriptLang] = useState<"korean" | "english">("english");
+  const { video, analysis, transcript } = result;
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -220,6 +224,41 @@ function VideoCard({ result }: { result: VideoResult }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Transcript section */}
+      {(transcript || analysis.transcriptEnglish) && (
+        <div className="border-t border-gray-100">
+          <button
+            onClick={() => setShowTranscript((s) => !s)}
+            className="w-full flex items-center justify-between px-4 py-3 text-sm text-gray-500 hover:bg-gray-50 transition-colors"
+          >
+            <span className="font-medium text-gray-700">Transcript</span>
+            {showTranscript ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+          {showTranscript && (
+            <div className="px-4 pb-4 space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setTranscriptLang("english")}
+                  className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${transcriptLang === "english" ? "bg-indigo-100 text-indigo-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                >
+                  English
+                </button>
+                <button
+                  onClick={() => setTranscriptLang("korean")}
+                  className={`px-3 py-1 text-xs rounded-full font-medium transition-colors ${transcriptLang === "korean" ? "bg-indigo-100 text-indigo-700" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                >
+                  Korean
+                </button>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3 max-h-80 overflow-y-auto text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
+                {transcriptLang === "english"
+                  ? (analysis.transcriptEnglish || "English translation not available.")
+                  : (transcript || "Korean transcript not available.")}
+              </div>
             </div>
           )}
         </div>

@@ -102,7 +102,7 @@ app.post("/api/analyze", async (req, res) => {
         }
       }
 
-      const result = { video, analysis };
+      const result = { video, analysis, transcript };
       results.push(result);
       emit({ type: "video_done", ...result });
     }

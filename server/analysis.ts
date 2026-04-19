@@ -16,6 +16,7 @@ export interface TickerAnalysis {
 
 export interface VideoAnalysis {
   videoSummary: string;
+  transcriptEnglish: string;
   tickers: TickerAnalysis[];
 }
 
@@ -39,11 +40,13 @@ INSTRUCTIONS:
 3. IGNORE all non-US stocks (Korean stocks like 삼성, Chinese stocks, etc.)
 4. For each US stock, determine the creator's sentiment based on what they said
 5. Provide 2-4 key points in English summarizing what the creator said about each stock
-6. Return ONLY valid JSON — no markdown, no explanation, no code fences
+6. Provide a full English translation of the transcript (comprehensive, not word-for-word)
+7. Return ONLY valid JSON — no markdown, no explanation, no code fences
 
 JSON structure to return:
 {
   "videoSummary": "2-3 sentence English summary of the video's main topic",
+  "transcriptEnglish": "Full English translation of the Korean transcript...",
   "tickers": [
     {
       "ticker": "NVDA",
@@ -76,6 +79,7 @@ ${transcript.slice(0, 14000)}`,
       .trim();
     const parsed = JSON.parse(clean) as VideoAnalysis;
     // Normalize
+    parsed.transcriptEnglish = parsed.transcriptEnglish ?? "";
     parsed.tickers = (parsed.tickers ?? []).map((t) => ({
       ...t,
       sentiment: (["bullish", "bearish", "neutral"].includes(t.sentiment)
