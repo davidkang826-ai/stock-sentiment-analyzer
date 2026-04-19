@@ -141,7 +141,7 @@ async function transcribeViaAssemblyAI(
       "-x", "--audio-format", "mp3", "--audio-quality", "5",
       "-o", audioPath, "--no-playlist",
       "--extractor-args", "youtube:player_client=web",
-      "--js-runtimes", "node:/usr/local/bin/node",
+      "--remote-components", "ejs:github",
     ];
     if (process.env.PROXY_URL) ytdlpArgs.push("--proxy", process.env.PROXY_URL);
 
