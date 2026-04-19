@@ -1,28 +1,6 @@
 const YT_API_KEY = process.env.YOUTUBE_API_KEY!;
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
 
-// Write YouTube cookies to a temp file once if YOUTUBE_COOKIES env var is set.
-// The env var should contain the full Netscape-format cookies.txt content.
-let cookiesFilePath: string | null = null;
-async function getCookiesArgs(): Promise<string[]> {
-  const args: string[] = [];
-  if (process.env.YOUTUBE_COOKIES) {
-    if (!cookiesFilePath) {
-      const { promises: fs } = await import("fs");
-      const { default: os } = await import("os");
-      const { default: path } = await import("path");
-      cookiesFilePath = path.join(os.tmpdir(), "yt-cookies.txt");
-      await fs.writeFile(cookiesFilePath, process.env.YOUTUBE_COOKIES, "utf-8");
-    }
-    args.push("--cookies", cookiesFilePath);
-  }
-  // Route through a residential proxy to bypass datacenter IP blocking
-  if (process.env.PROXY_URL) {
-    args.push("--proxy", process.env.PROXY_URL);
-  }
-  return args;
-}
-
 export interface VideoInfo {
   id: string;
   title: string;
@@ -95,66 +73,52 @@ export async function getTranscript(
   videoId: string,
   onProgress?: (msg: string) => void
 ): Promise<string> {
-  // Step 1: Try auto-generated captions (fast, ~2 seconds)
+  // Step 1: youtube_transcript_api (Python) — fetches captions directly, works on server IPs
   try {
-    const transcript = await getTranscriptViaCaptions(videoId);
+    const transcript = await getTranscriptViaPythonApi(videoId);
     if (transcript) return transcript;
   } catch (e: any) {
-    console.log(`[transcript] No captions for ${videoId}: ${e.message}`);
+    console.log(`[transcript] Python API failed for ${videoId}: ${e.message}`);
   }
 
-  // Step 2: Download audio + Whisper transcription (~3-8 minutes on CPU)
-  onProgress?.("📥 No captions found — downloading audio for Whisper transcription (this takes a few minutes)...");
-  return transcribeViaWhisper(videoId, onProgress);
+  // Step 2: AssemblyAI — upload audio and transcribe via cloud ASR
+  if (process.env.ASSEMBLYAI_API_KEY) {
+    onProgress?.("📥 No captions found — downloading audio for AssemblyAI transcription...");
+    try {
+      return await transcribeViaAssemblyAI(videoId, onProgress);
+    } catch (e: any) {
+      console.log(`[transcript] AssemblyAI failed for ${videoId}: ${e.message}`);
+    }
+  }
+
+  throw new Error("No transcript available — no captions found and no ASSEMBLYAI_API_KEY set");
 }
 
-async function getTranscriptViaCaptions(videoId: string): Promise<string> {
+// ── Step 1: youtube_transcript_api (Python) ──────────────────────────────────
+async function getTranscriptViaPythonApi(videoId: string): Promise<string> {
   const { spawn } = await import("child_process");
-  const { promises: fs } = await import("fs");
   const { default: path } = await import("path");
-  const { default: os } = await import("os");
+  const { fileURLToPath } = await import("url");
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-caps-${videoId}-`));
-  const outputTemplate = path.join(tmpDir, "%(id)s");
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const script = path.join(__dirname, "fetch_transcript.py");
 
-  try {
-    const cookiesArgs = await getCookiesArgs();
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn("python3", [script, videoId]);
+    let stdout = "";
     let stderr = "";
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn("yt-dlp", [
-        `https://www.youtube.com/watch?v=${videoId}`,
-        "--write-auto-subs",
-        "--write-subs",
-        "--sub-langs", "ko.*,ko",
-        "--skip-download",
-        "--sub-format", "vtt",
-        "-o", outputTemplate,
-        "--no-playlist",
-        "--extractor-args", "youtube:player_client=mweb,web",
-        ...cookiesArgs,
-      ]);
-      proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-      proc.stdout?.on("data", () => {}); // drain stdout
-      proc.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`yt-dlp exit ${code}: ${stderr.slice(0, 300)}`));
-      });
-      proc.on("error", reject);
+    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
+    proc.on("close", (code) => {
+      if (code === 0 && stdout.trim()) resolve(stdout.trim());
+      else reject(new Error(stderr.trim() || `exit code ${code}`));
     });
-
-    const files = await fs.readdir(tmpDir);
-    const vttFile = files.find((f) => f.endsWith(".vtt"));
-    if (!vttFile) throw new Error("No VTT subtitle file found");
-
-    const vttContent = await fs.readFile(path.join(tmpDir, vttFile), "utf-8");
-    return parseVtt(vttContent);
-  } finally {
-    const { promises: fs2 } = await import("fs");
-    await fs2.rm(tmpDir, { recursive: true, force: true });
-  }
+    proc.on("error", reject);
+  });
 }
 
-async function transcribeViaWhisper(
+// ── Step 2: AssemblyAI ────────────────────────────────────────────────────────
+async function transcribeViaAssemblyAI(
   videoId: string,
   onProgress?: (msg: string) => void
 ): Promise<string> {
@@ -162,28 +126,23 @@ async function transcribeViaWhisper(
   const { promises: fs } = await import("fs");
   const { default: path } = await import("path");
   const { default: os } = await import("os");
-  const { fileURLToPath } = await import("url");
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-audio-${videoId}-`));
   const audioPath = path.join(tmpDir, `${videoId}.mp3`);
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const whisperScript = path.join(__dirname, "whisper_transcribe.py");
 
   try {
-    const cookiesArgs = await getCookiesArgs();
-    // Download audio
+    // Download audio via yt-dlp
     onProgress?.("📥 Downloading audio...");
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("yt-dlp", [
+      const args = [
         `https://www.youtube.com/watch?v=${videoId}`,
-        "-x",
-        "--audio-format", "mp3",
-        "--audio-quality", "5",   // 128kbps — good enough for speech
-        "-o", audioPath,
-        "--no-playlist",
+        "-x", "--audio-format", "mp3", "--audio-quality", "5",
+        "-o", audioPath, "--no-playlist",
         "--extractor-args", "youtube:player_client=mweb,web",
-        ...cookiesArgs,
-      ]);
+      ];
+      if (process.env.PROXY_URL) args.push("--proxy", process.env.PROXY_URL);
+
+      const proc = spawn("yt-dlp", args);
       let stderr = "";
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
       proc.stdout?.on("data", () => {});
@@ -194,22 +153,44 @@ async function transcribeViaWhisper(
       proc.on("error", reject);
     });
 
-    onProgress?.("🎙️ Running Whisper transcription (Korean)... this may take a few minutes");
-
-    const transcript = await new Promise<string>((resolve, reject) => {
-      const proc = spawn("python3", [whisperScript, audioPath]);
-      let stdout = "";
-      let stderr = "";
-      proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-      proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-      proc.on("close", (code) => {
-        if (code === 0 && stdout.trim()) resolve(stdout.trim());
-        else reject(new Error(`Whisper failed (code ${code}): ${stderr.slice(0, 300)}`));
-      });
-      proc.on("error", reject);
+    // Upload audio to AssemblyAI
+    onProgress?.("☁️ Uploading audio to AssemblyAI...");
+    const audioBuffer = await fs.readFile(audioPath);
+    const uploadRes = await fetch("https://api.assemblyai.com/v2/upload", {
+      method: "POST",
+      headers: {
+        authorization: process.env.ASSEMBLYAI_API_KEY!,
+        "content-type": "application/octet-stream",
+      },
+      body: audioBuffer,
     });
+    if (!uploadRes.ok) throw new Error(`AssemblyAI upload failed: ${uploadRes.status}`);
+    const { upload_url } = await uploadRes.json() as any;
 
-    return transcript;
+    // Submit transcription job
+    onProgress?.("🎙️ Transcribing with AssemblyAI (Korean)...");
+    const transcriptRes = await fetch("https://api.assemblyai.com/v2/transcript", {
+      method: "POST",
+      headers: {
+        authorization: process.env.ASSEMBLYAI_API_KEY!,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ audio_url: upload_url, language_code: "ko" }),
+    });
+    if (!transcriptRes.ok) throw new Error(`AssemblyAI submit failed: ${transcriptRes.status}`);
+    const { id } = await transcriptRes.json() as any;
+
+    // Poll for completion
+    while (true) {
+      await new Promise((r) => setTimeout(r, 5000));
+      const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+        headers: { authorization: process.env.ASSEMBLYAI_API_KEY! },
+      });
+      const data = await pollRes.json() as any;
+      if (data.status === "completed") return data.text;
+      if (data.status === "error") throw new Error(`AssemblyAI error: ${data.error}`);
+      onProgress?.(`🎙️ Transcribing... (${data.status})`);
+    }
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
@@ -223,7 +204,6 @@ function parseVtt(vtt: string): string {
   for (const raw of lines) {
     const line = raw.trim();
 
-    // Skip header/metadata lines
     if (
       line.startsWith("WEBVTT") ||
       line.startsWith("Kind:") ||
@@ -234,14 +214,12 @@ function parseVtt(vtt: string): string {
       continue;
     }
 
-    // Timestamp line — next lines are caption text
     if (line.includes("-->")) {
       capturing = true;
       continue;
     }
 
     if (capturing && line) {
-      // Remove inline timestamp tags like <00:00:01.234> and <c> </c>
       const cleaned = line
         .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
         .replace(/<[^>]+>/g, "")
@@ -254,7 +232,6 @@ function parseVtt(vtt: string): string {
     }
   }
 
-  // Deduplicate consecutive identical lines (common in YT auto-subs)
   const deduped = texts.filter((t, i) => i === 0 || t !== texts[i - 1]);
   return deduped.join(" ").replace(/\s+/g, " ").trim();
 }
