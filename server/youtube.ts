@@ -181,7 +181,10 @@ async function transcribeViaAssemblyAI(
       },
       body: JSON.stringify({ audio_url: upload_url, language_code: "ko" }),
     });
-    if (!transcriptRes.ok) throw new Error(`AssemblyAI submit failed: ${transcriptRes.status}`);
+    if (!transcriptRes.ok) {
+      const errBody = await transcriptRes.text();
+      throw new Error(`AssemblyAI submit failed: ${transcriptRes.status} — ${errBody}`);
+    }
     const { id } = await transcriptRes.json() as any;
 
     // Poll for completion
