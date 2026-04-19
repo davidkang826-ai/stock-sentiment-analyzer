@@ -123,43 +123,72 @@ async function getTranscriptViaPythonApi(videoId: string): Promise<string> {
 // ── Step 2: AssemblyAI via Invidious audio URL ───────────────────────────────
 // Invidious returns direct googlevideo.com URLs — no download on Railway needed.
 // AssemblyAI fetches the audio directly from its own servers.
-const INVIDIOUS_INSTANCES = [
-  "https://iv.ggtyler.dev",
-  "https://invidious.perennialte.ch",
-  "https://yt.drgnz.club",
-  "https://invidious.nerdvpn.de",
-];
+async function getAudioUrlFromInvidious(videoId: string, onProgress?: (msg: string) => void): Promise<string> {
+  const instances = [
+    "https://iv.ggtyler.dev",
+    "https://invidious.perennialte.ch",
+    "https://yt.drgnz.club",
+    "https://invidious.nerdvpn.de",
+    "https://invidious.fdn.fr",
+  ];
 
-async function getAudioUrlFromInvidious(videoId: string): Promise<string> {
-  for (const instance of INVIDIOUS_INSTANCES) {
+  for (const instance of instances) {
     try {
+      onProgress?.(`🔗 Trying Invidious: ${instance}...`);
       const res = await fetch(`${instance}/api/v1/videos/${videoId}`, {
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.timeout(12000),
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        onProgress?.(`  ↳ HTTP ${res.status}`);
+        continue;
+      }
       const data = await res.json() as any;
-      const audioFormats: any[] = (data.adaptiveFormats ?? []).filter(
-        (f: any) => f.type?.startsWith("audio/") && f.url
-      );
-      if (!audioFormats.length) continue;
-      // Pick highest bitrate
+      const audioFormats: any[] = [
+        ...(data.adaptiveFormats ?? []),
+        ...(data.formatStreams ?? []),
+      ].filter((f: any) => f.url && (f.type?.startsWith("audio/") || f.audioQuality));
+      if (!audioFormats.length) {
+        onProgress?.(`  ↳ No audio streams in response`);
+        continue;
+      }
       audioFormats.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-      console.log(`[invidious] Got audio URL from ${instance}`);
+      onProgress?.(`  ↳ Got audio URL`);
       return audioFormats[0].url;
     } catch (e: any) {
-      console.log(`[invidious] ${instance} failed: ${e.message}`);
+      onProgress?.(`  ↳ Error: ${e.message}`);
     }
   }
-  throw new Error("All Invidious instances failed — could not get audio URL");
+
+  // Try Piped API as fallback
+  try {
+    onProgress?.(`🔗 Trying Piped API...`);
+    const res = await fetch(`https://pipedapi.kavin.rocks/streams/${videoId}`, {
+      signal: AbortSignal.timeout(12000),
+    });
+    if (res.ok) {
+      const data = await res.json() as any;
+      const audioStreams: any[] = data.audioStreams ?? [];
+      if (audioStreams.length > 0) {
+        audioStreams.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+        onProgress?.(`  ↳ Got audio URL from Piped`);
+        return audioStreams[0].url;
+      }
+    }
+    onProgress?.(`  ↳ Piped HTTP ${res.status}`);
+  } catch (e: any) {
+    onProgress?.(`  ↳ Piped error: ${e.message}`);
+  }
+
+  throw new Error("All mirror instances failed — could not get audio stream URL");
 }
 
 async function transcribeViaAssemblyAI(
   videoId: string,
   onProgress?: (msg: string) => void
 ): Promise<string> {
-  // Get direct audio URL from Invidious (no download on Railway)
-  onProgress?.("🔗 Getting audio stream URL...");
-  const audioUrl = await getAudioUrlFromInvidious(videoId);
+  // Get direct audio URL from Invidious/Piped (no download on Railway)
+  onProgress?.("🔗 Getting audio stream URL from mirrors...");
+  const audioUrl = await getAudioUrlFromInvidious(videoId, onProgress);
 
   // Submit transcription job with the direct URL
   onProgress?.("🎙️ Transcribing with AssemblyAI (Korean)...");
