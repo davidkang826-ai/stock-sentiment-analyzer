@@ -87,14 +87,12 @@ export async function getTranscript(
     try {
       return await transcribeViaAssemblyAI(videoId, onProgress);
     } catch (e: any) {
-      console.log(`[transcript] AssemblyAI failed for ${videoId}: ${e.message}`);
+      onProgress?.(`❌ Audio transcription error: ${e.message}`);
+      throw new Error(`Audio transcription failed: ${e.message}`);
     }
   }
 
-  if (!process.env.ASSEMBLYAI_API_KEY) {
-    throw new Error("No captions found and ASSEMBLYAI_API_KEY is not set — cannot transcribe audio");
-  }
-  throw new Error("No transcript available — captions not found and audio transcription failed");
+  throw new Error("No captions found and ASSEMBLYAI_API_KEY is not set — cannot transcribe audio");
 }
 
 // ── Step 1: youtube_transcript_api (Python) ──────────────────────────────────
