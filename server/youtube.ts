@@ -179,31 +179,30 @@ async function getAudioUrlFromInvidious(videoId: string, onProgress?: (msg: stri
     onProgress?.(`  ↳ Piped error: ${e.message}`);
   }
 
-  // Try Cobalt API (cobalt.tools) — maintained public media downloader
-  try {
-    onProgress?.(`🔗 Trying Cobalt API...`);
-    const res = await fetch("https://api.cobalt.tools/", {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        url: `https://www.youtube.com/watch?v=${videoId}`,
-        downloadMode: "audio",
-        audioFormat: "mp3",
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (res.ok) {
-      const data = await res.json() as any;
-      if ((data.status === "redirect" || data.status === "tunnel") && data.url) {
-        onProgress?.(`  ↳ Got audio URL from Cobalt`);
-        return data.url;
+  // Try Cobalt API (cobalt.tools) — v10 format
+  for (const cobaltUrl of ["https://api.cobalt.tools", "https://cobalt.tools/api"]) {
+    try {
+      onProgress?.(`🔗 Trying Cobalt (${cobaltUrl})...`);
+      const res = await fetch(cobaltUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          downloadMode: "audio",
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      const text = await res.text();
+      onProgress?.(`  ↳ HTTP ${res.status}: ${text.slice(0, 120)}`);
+      if (res.ok) {
+        const data = JSON.parse(text) as any;
+        if ((data.status === "redirect" || data.status === "tunnel") && data.url) {
+          return data.url;
+        }
       }
-      onProgress?.(`  ↳ Cobalt status: ${data.status} ${data.error?.code ?? ""}`);
-    } else {
-      onProgress?.(`  ↳ Cobalt HTTP ${res.status}`);
+    } catch (e: any) {
+      onProgress?.(`  ↳ Cobalt error: ${e.message}`);
     }
-  } catch (e: any) {
-    onProgress?.(`  ↳ Cobalt error: ${e.message}`);
   }
 
   throw new Error("All mirror instances failed — could not get audio stream URL");
