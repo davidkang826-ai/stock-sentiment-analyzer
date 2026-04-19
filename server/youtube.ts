@@ -16,8 +16,10 @@ async function getCookiesArgs(): Promise<string[]> {
     }
     args.push("--cookies", cookiesFilePath);
   }
-  // Download yt-dlp's remote JS challenge solver (yt-dlp's own recommendation)
-  args.push("--remote-components", "ejs:github");
+  // Route through a residential proxy to bypass datacenter IP blocking
+  if (process.env.PROXY_URL) {
+    args.push("--proxy", process.env.PROXY_URL);
+  }
   return args;
 }
 
