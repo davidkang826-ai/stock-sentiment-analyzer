@@ -159,7 +159,7 @@ async function getAudioUrlFromInvidious(videoId: string, onProgress?: (msg: stri
     }
   }
 
-  // Try Piped API as fallback
+  // Try Piped API
   try {
     onProgress?.(`🔗 Trying Piped API...`);
     const res = await fetch(`https://pipedapi.kavin.rocks/streams/${videoId}`, {
@@ -177,6 +177,33 @@ async function getAudioUrlFromInvidious(videoId: string, onProgress?: (msg: stri
     onProgress?.(`  ↳ Piped HTTP ${res.status}`);
   } catch (e: any) {
     onProgress?.(`  ↳ Piped error: ${e.message}`);
+  }
+
+  // Try Cobalt API (cobalt.tools) — maintained public media downloader
+  try {
+    onProgress?.(`🔗 Trying Cobalt API...`);
+    const res = await fetch("https://api.cobalt.tools/", {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        downloadMode: "audio",
+        audioFormat: "mp3",
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const data = await res.json() as any;
+      if ((data.status === "redirect" || data.status === "tunnel") && data.url) {
+        onProgress?.(`  ↳ Got audio URL from Cobalt`);
+        return data.url;
+      }
+      onProgress?.(`  ↳ Cobalt status: ${data.status} ${data.error?.code ?? ""}`);
+    } else {
+      onProgress?.(`  ↳ Cobalt HTTP ${res.status}`);
+    }
+  } catch (e: any) {
+    onProgress?.(`  ↳ Cobalt error: ${e.message}`);
   }
 
   throw new Error("All mirror instances failed — could not get audio stream URL");
