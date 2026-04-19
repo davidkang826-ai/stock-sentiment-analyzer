@@ -91,7 +91,10 @@ export async function getTranscript(
     }
   }
 
-  throw new Error("No transcript available — no captions found and no ASSEMBLYAI_API_KEY set");
+  if (!process.env.ASSEMBLYAI_API_KEY) {
+    throw new Error("No captions found and ASSEMBLYAI_API_KEY is not set — cannot transcribe audio");
+  }
+  throw new Error("No transcript available — captions not found and audio transcription failed");
 }
 
 // ── Step 1: youtube_transcript_api (Python) ──────────────────────────────────
@@ -131,24 +134,21 @@ async function transcribeViaAssemblyAI(
   const audioPath = path.join(tmpDir, `${videoId}.mp3`);
 
   try {
-    // Download audio via yt-dlp
+    // Download audio via pytubefix (handles YouTube auth better than yt-dlp)
     onProgress?.("📥 Downloading audio...");
-    await new Promise<void>((resolve, reject) => {
-      const args = [
-        `https://www.youtube.com/watch?v=${videoId}`,
-        "-x", "--audio-format", "mp3", "--audio-quality", "5",
-        "-o", audioPath, "--no-playlist",
-        "--extractor-args", "youtube:player_client=mweb,web",
-      ];
-      if (process.env.PROXY_URL) args.push("--proxy", process.env.PROXY_URL);
+    const { default: path2 } = await import("path");
+    const { fileURLToPath: ftu } = await import("url");
+    const __dirname2 = path2.dirname(ftu(import.meta.url));
+    const dlScript = path2.join(__dirname2, "download_audio.py");
 
-      const proc = spawn("yt-dlp", args);
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn("python3", [dlScript, videoId, audioPath]);
       let stderr = "";
       proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
       proc.stdout?.on("data", () => {});
       proc.on("close", (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`Audio download failed (code ${code}): ${stderr.slice(0, 300)}`));
+        else reject(new Error(`Audio download failed: ${stderr.slice(0, 400)}`));
       });
       proc.on("error", reject);
     });
