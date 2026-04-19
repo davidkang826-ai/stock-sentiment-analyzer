@@ -213,11 +213,30 @@ async function transcribeViaAssemblyAI(
   videoId: string,
   onProgress?: (msg: string) => void
 ): Promise<string> {
-  // Get direct audio URL from Invidious/Piped (no download on Railway)
+  // Get audio URL from mirrors (Invidious / Piped / Cobalt)
   onProgress?.("🔗 Getting audio stream URL from mirrors...");
   const audioUrl = await getAudioUrlFromInvidious(videoId, onProgress);
 
-  // Submit transcription job with the direct URL
+  // Download audio to Railway from the mirror URL (not from YouTube directly)
+  onProgress?.("📥 Downloading audio from mirror...");
+  const audioRes = await fetch(audioUrl, { signal: AbortSignal.timeout(120000) });
+  if (!audioRes.ok) throw new Error(`Mirror download failed: ${audioRes.status}`);
+  const audioBuffer = Buffer.from(await audioRes.arrayBuffer());
+
+  // Upload to AssemblyAI
+  onProgress?.("☁️ Uploading to AssemblyAI...");
+  const uploadRes = await fetch("https://api.assemblyai.com/v2/upload", {
+    method: "POST",
+    headers: {
+      authorization: process.env.ASSEMBLYAI_API_KEY!,
+      "content-type": "application/octet-stream",
+    },
+    body: audioBuffer,
+  });
+  if (!uploadRes.ok) throw new Error(`AssemblyAI upload failed: ${uploadRes.status}`);
+  const { upload_url } = await uploadRes.json() as any;
+
+  // Submit transcription job
   onProgress?.("🎙️ Transcribing with AssemblyAI (Korean)...");
   const transcriptRes = await fetch("https://api.assemblyai.com/v2/transcript", {
     method: "POST",
@@ -225,7 +244,7 @@ async function transcribeViaAssemblyAI(
       authorization: process.env.ASSEMBLYAI_API_KEY!,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ audio_url: audioUrl, language_code: "ko" }),
+    body: JSON.stringify({ audio_url: upload_url, language_code: "ko" }),
   });
   if (!transcriptRes.ok) throw new Error(`AssemblyAI submit failed: ${transcriptRes.status}`);
   const { id } = await transcriptRes.json() as any;
