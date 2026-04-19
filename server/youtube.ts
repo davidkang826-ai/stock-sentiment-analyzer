@@ -120,79 +120,70 @@ async function getTranscriptViaPythonApi(videoId: string): Promise<string> {
   });
 }
 
-// ── Step 2: AssemblyAI ────────────────────────────────────────────────────────
+// ── Step 2: AssemblyAI via Invidious audio URL ───────────────────────────────
+// Invidious returns direct googlevideo.com URLs — no download on Railway needed.
+// AssemblyAI fetches the audio directly from its own servers.
+const INVIDIOUS_INSTANCES = [
+  "https://iv.ggtyler.dev",
+  "https://invidious.perennialte.ch",
+  "https://yt.drgnz.club",
+  "https://invidious.nerdvpn.de",
+];
+
+async function getAudioUrlFromInvidious(videoId: string): Promise<string> {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const res = await fetch(`${instance}/api/v1/videos/${videoId}`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json() as any;
+      const audioFormats: any[] = (data.adaptiveFormats ?? []).filter(
+        (f: any) => f.type?.startsWith("audio/") && f.url
+      );
+      if (!audioFormats.length) continue;
+      // Pick highest bitrate
+      audioFormats.sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+      console.log(`[invidious] Got audio URL from ${instance}`);
+      return audioFormats[0].url;
+    } catch (e: any) {
+      console.log(`[invidious] ${instance} failed: ${e.message}`);
+    }
+  }
+  throw new Error("All Invidious instances failed — could not get audio URL");
+}
+
 async function transcribeViaAssemblyAI(
   videoId: string,
   onProgress?: (msg: string) => void
 ): Promise<string> {
-  const { spawn } = await import("child_process");
-  const { promises: fs } = await import("fs");
-  const { default: path } = await import("path");
-  const { default: os } = await import("os");
+  // Get direct audio URL from Invidious (no download on Railway)
+  onProgress?.("🔗 Getting audio stream URL...");
+  const audioUrl = await getAudioUrlFromInvidious(videoId);
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `yt-audio-${videoId}-`));
-  const audioPath = path.join(tmpDir, `${videoId}.mp3`);
+  // Submit transcription job with the direct URL
+  onProgress?.("🎙️ Transcribing with AssemblyAI (Korean)...");
+  const transcriptRes = await fetch("https://api.assemblyai.com/v2/transcript", {
+    method: "POST",
+    headers: {
+      authorization: process.env.ASSEMBLYAI_API_KEY!,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ audio_url: audioUrl, language_code: "ko" }),
+  });
+  if (!transcriptRes.ok) throw new Error(`AssemblyAI submit failed: ${transcriptRes.status}`);
+  const { id } = await transcriptRes.json() as any;
 
-  try {
-    // Download audio via pytubefix (handles YouTube auth better than yt-dlp)
-    onProgress?.("📥 Downloading audio...");
-    const { default: path2 } = await import("path");
-    const { fileURLToPath: ftu } = await import("url");
-    const __dirname2 = path2.dirname(ftu(import.meta.url));
-    const dlScript = path2.join(__dirname2, "download_audio.py");
-
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn("python3", [dlScript, videoId, audioPath]);
-      let stderr = "";
-      proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-      proc.stdout?.on("data", () => {});
-      proc.on("close", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`Audio download failed: ${stderr.slice(0, 400)}`));
-      });
-      proc.on("error", reject);
+  // Poll for completion
+  while (true) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+      headers: { authorization: process.env.ASSEMBLYAI_API_KEY! },
     });
-
-    // Upload audio to AssemblyAI
-    onProgress?.("☁️ Uploading audio to AssemblyAI...");
-    const audioBuffer = await fs.readFile(audioPath);
-    const uploadRes = await fetch("https://api.assemblyai.com/v2/upload", {
-      method: "POST",
-      headers: {
-        authorization: process.env.ASSEMBLYAI_API_KEY!,
-        "content-type": "application/octet-stream",
-      },
-      body: audioBuffer,
-    });
-    if (!uploadRes.ok) throw new Error(`AssemblyAI upload failed: ${uploadRes.status}`);
-    const { upload_url } = await uploadRes.json() as any;
-
-    // Submit transcription job
-    onProgress?.("🎙️ Transcribing with AssemblyAI (Korean)...");
-    const transcriptRes = await fetch("https://api.assemblyai.com/v2/transcript", {
-      method: "POST",
-      headers: {
-        authorization: process.env.ASSEMBLYAI_API_KEY!,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ audio_url: upload_url, language_code: "ko" }),
-    });
-    if (!transcriptRes.ok) throw new Error(`AssemblyAI submit failed: ${transcriptRes.status}`);
-    const { id } = await transcriptRes.json() as any;
-
-    // Poll for completion
-    while (true) {
-      await new Promise((r) => setTimeout(r, 5000));
-      const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
-        headers: { authorization: process.env.ASSEMBLYAI_API_KEY! },
-      });
-      const data = await pollRes.json() as any;
-      if (data.status === "completed") return data.text;
-      if (data.status === "error") throw new Error(`AssemblyAI error: ${data.error}`);
-      onProgress?.(`🎙️ Transcribing... (${data.status})`);
-    }
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    const data = await pollRes.json() as any;
+    if (data.status === "completed") return data.text;
+    if (data.status === "error") throw new Error(`AssemblyAI error: ${data.error}`);
+    onProgress?.(`🎙️ Transcribing... (${data.status})`);
   }
 }
 
