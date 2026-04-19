@@ -269,9 +269,8 @@ function VideoCard({ result }: { result: VideoResult }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [videoUrl, setVideoUrl] = useState(
-    "https://www.youtube.com/watch?v=l1IFamaX_bg"
-  );
+  const [mode, setMode] = useState<"channel" | "video">("video");
+  const [videoUrl, setVideoUrl] = useState("https://www.youtube.com/watch?v=l1IFamaX_bg");
   const [channelInfo, setChannelInfo] = useState<ChannelInfo | null>(null);
   const [isLoadingChannel, setIsLoadingChannel] = useState(false);
   const [channelError, setChannelError] = useState<string | null>(null);
@@ -289,10 +288,7 @@ export default function App() {
 
   const loadChannel = useCallback(async () => {
     const videoId = extractVideoId(videoUrl);
-    if (!videoId) {
-      setChannelError("Could not extract video ID from URL.");
-      return;
-    }
+    if (!videoId) { setChannelError("Could not extract video ID from URL."); return; }
     setIsLoadingChannel(true);
     setChannelError(null);
     setChannelInfo(null);
@@ -310,36 +306,23 @@ export default function App() {
     }
   }, [videoUrl]);
 
-  const analyze = useCallback(async () => {
-    if (!channelInfo) return;
+  const streamResults = useCallback(async (fetchPromise: Promise<Response>) => {
     setIsAnalyzing(true);
     setAnalyzeError(null);
     setProgressLog([]);
     setResults([]);
     setIsDone(false);
-
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          channelId: channelInfo.channelId,
-          startDate,
-          endDate,
-        }),
-      });
-
+      const res = await fetchPromise;
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() ?? "";
-
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           try {
@@ -348,7 +331,7 @@ export default function App() {
               setProgressLog((prev) => [...prev, event.message]);
               setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
             } else if (event.type === "video_done") {
-              setResults((prev) => [...prev, { video: event.video, analysis: event.analysis }]);
+              setResults((prev) => [...prev, { video: event.video, analysis: event.analysis, transcript: event.transcript }]);
             } else if (event.type === "error") {
               setAnalyzeError(event.message);
             } else if (event.type === "done") {
@@ -362,7 +345,26 @@ export default function App() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [channelInfo, startDate, endDate]);
+  }, []);
+
+  const analyzeVideo = useCallback(() => {
+    const videoId = extractVideoId(videoUrl);
+    if (!videoId) { setAnalyzeError("Could not extract video ID from URL."); return; }
+    streamResults(fetch("/api/analyze-video", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoId }),
+    }));
+  }, [videoUrl, streamResults]);
+
+  const analyzeChannel = useCallback(() => {
+    if (!channelInfo) return;
+    streamResults(fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channelId: channelInfo.channelId, startDate, endDate }),
+    }));
+  }, [channelInfo, startDate, endDate, streamResults]);
 
   const totalTickers = results.reduce((n, r) => n + r.analysis.tickers.length, 0);
 
@@ -384,11 +386,26 @@ export default function App() {
       <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {/* Setup card */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-5">
-          {/* Video URL */}
+          {/* Mode toggle */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+            <button
+              onClick={() => { setMode("video"); setResults([]); setIsDone(false); }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${mode === "video" ? "bg-indigo-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+            >
+              Single Video
+            </button>
+            <button
+              onClick={() => { setMode("channel"); setResults([]); setIsDone(false); }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${mode === "channel" ? "bg-indigo-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+            >
+              Channel (Date Range)
+            </button>
+          </div>
+
+          {/* Video URL input */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               YouTube Video URL
-              <span className="text-gray-400 font-normal ml-1">(any video from the channel)</span>
             </label>
             <div className="flex gap-2">
               <input
@@ -398,105 +415,63 @@ export default function App() {
                 placeholder="https://www.youtube.com/watch?v=..."
                 className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
-              <button
-                onClick={loadChannel}
-                disabled={isLoadingChannel || !videoUrl.trim()}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isLoadingChannel ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
-                Load Channel
-              </button>
+              {mode === "channel" && (
+                <button
+                  onClick={loadChannel}
+                  disabled={isLoadingChannel || !videoUrl.trim()}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isLoadingChannel ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  Load Channel
+                </button>
+              )}
             </div>
-            {channelError && (
-              <p className="text-red-500 text-xs mt-1.5">{channelError}</p>
-            )}
+            {channelError && <p className="text-red-500 text-xs mt-1.5">{channelError}</p>}
           </div>
 
-          {/* Channel info */}
-          {channelInfo && (
-            <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-              {channelInfo.thumbnail && (
-                <img
-                  src={channelInfo.thumbnail}
-                  alt={channelInfo.channelTitle}
-                  className="w-10 h-10 rounded-full"
-                />
-              )}
-              <div>
-                <p className="text-sm font-medium text-indigo-900">{channelInfo.channelTitle}</p>
-                <p className="text-xs text-indigo-500">Channel loaded</p>
+          {/* Channel mode extras */}
+          {mode === "channel" && channelInfo && (
+            <>
+              <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                {channelInfo.thumbnail && (
+                  <img src={channelInfo.thumbnail} alt={channelInfo.channelTitle} className="w-10 h-10 rounded-full" />
+                )}
+                <div>
+                  <p className="text-sm font-medium text-indigo-900">{channelInfo.channelTitle}</p>
+                  <p className="text-xs text-indigo-500">Channel loaded</p>
+                </div>
               </div>
-            </div>
-          )}
-
-          {/* Date range */}
-          {channelInfo && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Start Date</label>
-                <input
-                  type="date"
-                  value={startDate}
-                  max={endDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Start Date</label>
+                  <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">End Date</label>
+                  <input type="date" value={endDate} min={startDate} max={todayStr()} onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">End Date</label>
-                <input
-                  type="date"
-                  value={endDate}
-                  min={startDate}
-                  max={todayStr()}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+              <div className="flex gap-2">
+                {[{ label: "Last 3 days", start: daysAgoStr(3) }, { label: "Last 7 days", start: daysAgoStr(7) }, { label: "Last 14 days", start: daysAgoStr(14) }].map((p) => (
+                  <button key={p.label} onClick={() => { setStartDate(p.start); setEndDate(todayStr()); }}
+                    className="px-3 py-1 text-xs bg-gray-100 text-gray-600 rounded-full hover:bg-indigo-100 hover:text-indigo-700 transition-colors">
+                    {p.label}
+                  </button>
+                ))}
               </div>
-            </div>
-          )}
-
-          {/* Quick presets */}
-          {channelInfo && (
-            <div className="flex gap-2">
-              {[
-                { label: "Last 3 days", start: daysAgoStr(3) },
-                { label: "Last 7 days", start: daysAgoStr(7) },
-                { label: "Last 14 days", start: daysAgoStr(14) },
-              ].map((p) => (
-                <button
-                  key={p.label}
-                  onClick={() => { setStartDate(p.start); setEndDate(todayStr()); }}
-                  className="px-3 py-1 text-xs bg-gray-100 text-gray-600 rounded-full hover:bg-indigo-100 hover:text-indigo-700 transition-colors"
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
+            </>
           )}
 
           {/* Analyze button */}
-          {channelInfo && (
+          {(mode === "video" || (mode === "channel" && channelInfo)) && (
             <button
-              onClick={analyze}
+              onClick={mode === "video" ? analyzeVideo : analyzeChannel}
               disabled={isAnalyzing}
               className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <TrendingUp className="h-4 w-4" />
-                  Analyze Videos
-                </>
-              )}
+              {isAnalyzing ? <><Loader2 className="h-4 w-4 animate-spin" />Analyzing...</> : <><TrendingUp className="h-4 w-4" />Analyze</>}
             </button>
           )}
         </div>

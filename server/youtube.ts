@@ -14,6 +14,21 @@ export interface ChannelInfo {
   thumbnail: string;
 }
 
+export async function getSingleVideoInfo(videoId: string): Promise<VideoInfo> {
+  const url = `${YT_BASE}/videos?id=${videoId}&part=snippet&key=${YT_API_KEY}`;
+  const res = await fetch(url);
+  const json = await res.json() as any;
+  if (json.error) throw new Error(json.error.message);
+  const item = json.items?.[0];
+  if (!item) throw new Error("Video not found");
+  return {
+    id: videoId,
+    title: item.snippet.title,
+    publishedAt: item.snippet.publishedAt,
+    thumbnail: item.snippet.thumbnails?.medium?.url ?? "",
+  };
+}
+
 export async function getChannelInfoFromVideo(videoId: string): Promise<ChannelInfo> {
   const url = `${YT_BASE}/videos?id=${videoId}&part=snippet&key=${YT_API_KEY}`;
   const res = await fetch(url);
