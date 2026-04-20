@@ -269,14 +269,12 @@ function VideoCard({ result }: { result: VideoResult }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [mode, setMode] = useState<"channel" | "video">("video");
+  const [mode, setMode] = useState<"channel" | "video">("channel");
   const [videoUrl, setVideoUrl] = useState("https://www.youtube.com/watch?v=l1IFamaX_bg");
+  const [channelUrl, setChannelUrl] = useState("https://www.youtube.com/@dantekr");
   const [channelInfo, setChannelInfo] = useState<ChannelInfo | null>(null);
   const [isLoadingChannel, setIsLoadingChannel] = useState(false);
   const [channelError, setChannelError] = useState<string | null>(null);
-
-  const [startDate, setStartDate] = useState(daysAgoStr(3));
-  const [endDate, setEndDate] = useState(todayStr());
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progressLog, setProgressLog] = useState<string[]>([]);
@@ -287,15 +285,13 @@ export default function App() {
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const loadChannel = useCallback(async () => {
-    const videoId = extractVideoId(videoUrl);
-    if (!videoId) { setChannelError("Could not extract video ID from URL."); return; }
     setIsLoadingChannel(true);
     setChannelError(null);
     setChannelInfo(null);
     setResults([]);
     setIsDone(false);
     try {
-      const res = await fetch(`/api/channel-info?videoId=${videoId}`);
+      const res = await fetch(`/api/channel-from-url?url=${encodeURIComponent(channelUrl)}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setChannelInfo(data);
@@ -304,7 +300,7 @@ export default function App() {
     } finally {
       setIsLoadingChannel(false);
     }
-  }, [videoUrl]);
+  }, [channelUrl]);
 
   const streamResults = useCallback(async (fetchPromise: Promise<Response>) => {
     setIsAnalyzing(true);
@@ -359,12 +355,12 @@ export default function App() {
 
   const analyzeChannel = useCallback(() => {
     if (!channelInfo) return;
-    streamResults(fetch("/api/analyze", {
+    streamResults(fetch("/api/analyze-channel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ channelId: channelInfo.channelId, startDate, endDate }),
+      body: JSON.stringify({ channelId: channelInfo.channelId }),
     }));
-  }, [channelInfo, startDate, endDate, streamResults]);
+  }, [channelInfo, streamResults]);
 
   const totalTickers = results.reduce((n, r) => n + r.analysis.tickers.length, 0);
 
@@ -389,79 +385,67 @@ export default function App() {
           {/* Mode toggle */}
           <div className="flex rounded-lg border border-gray-200 overflow-hidden">
             <button
+              onClick={() => { setMode("channel"); setResults([]); setIsDone(false); setChannelInfo(null); }}
+              className={`flex-1 py-2 text-sm font-medium transition-colors ${mode === "channel" ? "bg-indigo-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
+            >
+              Channel (Latest 10)
+            </button>
+            <button
               onClick={() => { setMode("video"); setResults([]); setIsDone(false); }}
               className={`flex-1 py-2 text-sm font-medium transition-colors ${mode === "video" ? "bg-indigo-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
             >
               Single Video
             </button>
-            <button
-              onClick={() => { setMode("channel"); setResults([]); setIsDone(false); }}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${mode === "channel" ? "bg-indigo-600 text-white" : "bg-white text-gray-500 hover:bg-gray-50"}`}
-            >
-              Channel (Date Range)
-            </button>
           </div>
 
-          {/* Video URL input */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              YouTube Video URL
-            </label>
-            <div className="flex gap-2">
+          {/* Channel mode */}
+          {mode === "channel" && (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">YouTube Channel URL</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={channelUrl}
+                    onChange={(e) => { setChannelUrl(e.target.value); setChannelInfo(null); }}
+                    placeholder="https://www.youtube.com/@channelname"
+                    className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  />
+                  <button
+                    onClick={loadChannel}
+                    disabled={isLoadingChannel || !channelUrl.trim()}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {isLoadingChannel ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    Load
+                  </button>
+                </div>
+                {channelError && <p className="text-red-500 text-xs mt-1.5">{channelError}</p>}
+              </div>
+              {channelInfo && (
+                <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+                  {channelInfo.thumbnail && <img src={channelInfo.thumbnail} alt={channelInfo.channelTitle} className="w-10 h-10 rounded-full" />}
+                  <div>
+                    <p className="text-sm font-medium text-indigo-900">{channelInfo.channelTitle}</p>
+                    <p className="text-xs text-indigo-500">Latest 10 videos will be analyzed</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Single video mode */}
+          {mode === "video" && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">YouTube Video URL</label>
               <input
                 type="text"
                 value={videoUrl}
                 onChange={(e) => setVideoUrl(e.target.value)}
                 placeholder="https://www.youtube.com/watch?v=..."
-                className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
-              {mode === "channel" && (
-                <button
-                  onClick={loadChannel}
-                  disabled={isLoadingChannel || !videoUrl.trim()}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isLoadingChannel ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                  Load Channel
-                </button>
-              )}
             </div>
-            {channelError && <p className="text-red-500 text-xs mt-1.5">{channelError}</p>}
-          </div>
-
-          {/* Channel mode extras */}
-          {mode === "channel" && channelInfo && (
-            <>
-              <div className="flex items-center gap-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
-                {channelInfo.thumbnail && (
-                  <img src={channelInfo.thumbnail} alt={channelInfo.channelTitle} className="w-10 h-10 rounded-full" />
-                )}
-                <div>
-                  <p className="text-sm font-medium text-indigo-900">{channelInfo.channelTitle}</p>
-                  <p className="text-xs text-indigo-500">Channel loaded</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Start Date</label>
-                  <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">End Date</label>
-                  <input type="date" value={endDate} min={startDate} max={todayStr()} onChange={(e) => setEndDate(e.target.value)}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                {[{ label: "Last 3 days", start: daysAgoStr(3) }, { label: "Last 7 days", start: daysAgoStr(7) }, { label: "Last 14 days", start: daysAgoStr(14) }].map((p) => (
-                  <button key={p.label} onClick={() => { setStartDate(p.start); setEndDate(todayStr()); }}
-                    className="px-3 py-1 text-xs bg-gray-100 text-gray-600 rounded-full hover:bg-indigo-100 hover:text-indigo-700 transition-colors">
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </>
           )}
 
           {/* Analyze button */}

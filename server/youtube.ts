@@ -14,6 +14,58 @@ export interface ChannelInfo {
   thumbnail: string;
 }
 
+// Resolve a YouTube channel URL to a channel ID.
+// Supports: /channel/UCxxx, /@handle, /c/name, /user/name
+export async function getChannelIdFromUrl(channelUrl: string): Promise<ChannelInfo> {
+  // Direct channel ID
+  const idMatch = channelUrl.match(/youtube\.com\/channel\/(UC[\w-]+)/);
+  if (idMatch) {
+    const res = await fetch(`${YT_BASE}/channels?id=${idMatch[1]}&part=snippet&key=${YT_API_KEY}`);
+    const json = await res.json() as any;
+    if (json.error) throw new Error(json.error.message);
+    const item = json.items?.[0];
+    if (!item) throw new Error("Channel not found");
+    return {
+      channelId: item.id,
+      channelTitle: item.snippet.title,
+      thumbnail: item.snippet.thumbnails?.default?.url ?? "",
+    };
+  }
+
+  // @handle
+  const handleMatch = channelUrl.match(/youtube\.com\/@([\w.-]+)/);
+  if (handleMatch) {
+    const res = await fetch(`${YT_BASE}/channels?forHandle=@${handleMatch[1]}&part=snippet&key=${YT_API_KEY}`);
+    const json = await res.json() as any;
+    if (json.error) throw new Error(json.error.message);
+    const item = json.items?.[0];
+    if (!item) throw new Error("Channel not found for handle @" + handleMatch[1]);
+    return {
+      channelId: item.id,
+      channelTitle: item.snippet.title,
+      thumbnail: item.snippet.thumbnails?.default?.url ?? "",
+    };
+  }
+
+  throw new Error("Could not parse channel URL. Use a URL like youtube.com/@channelname or youtube.com/channel/UC...");
+}
+
+export async function getLatestVideos(channelId: string, count = 10): Promise<VideoInfo[]> {
+  const url =
+    `${YT_BASE}/search?channelId=${channelId}&type=video&order=date` +
+    `&maxResults=${count}&part=snippet&key=${YT_API_KEY}`;
+  const res = await fetch(url);
+  const json = await res.json() as any;
+  if (json.error) throw new Error(json.error.message);
+  if (!json.items?.length) return [];
+  return json.items.map((item: any) => ({
+    id: item.id.videoId,
+    title: item.snippet.title,
+    publishedAt: item.snippet.publishedAt,
+    thumbnail: item.snippet.thumbnails?.medium?.url ?? "",
+  }));
+}
+
 export async function getSingleVideoInfo(videoId: string): Promise<VideoInfo> {
   const url = `${YT_BASE}/videos?id=${videoId}&part=snippet&key=${YT_API_KEY}`;
   const res = await fetch(url);
